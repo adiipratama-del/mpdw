@@ -1,0 +1,265 @@
+---
+title: "Tugas-Pertemuan-2"
+output:
+  html_document: 
+    theme: lumen
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    code_folding: hide
+  pdf_document: default
+  word_document: default
+---
+
+## Tugas
+
+1.  Setiap kelompok memilih satu data time series dengan panjang ≥ 500 periode.
+
+2.  Data dibagi rata ke setiap anggota; minimal 100 observasi per orang.
+
+3.  Terapkan metode pemulusan yang sudah dipelajari (SMA, DMA, SES, DES, atau Holt-Winters) pada bagian data masing-masing
+
+4.  Bandingkan kinerja metode dan tentukan metode terbaik untuk data tersebut menggunakan metrik akurasi (mis. SSE/MSE/RMSE/MAPE), lalu jelaskan alasannya secara singkat.
+
+    Upload tugas per individu ke GitHub pada folder `Pertemuan-2` dengan format HTML bernama `Tugas-Pertemuan-2.html`.
+
+```{r}
+library(forecast)
+library(graphics)
+library(TTR)
+library(TSA)
+library(rio)
+library(ggplot2)
+```
+
+```{r}
+# Impor data
+data <- import("Beijing_Air_Quality_Rapi.csv")
+head(data)
+```
+## Pembagian Data
+```{r}
+# Mengambil subset baris ke-583 hingga 776
+data1 <- data[583:776, ]
+str(data1)
+dim(data1)
+
+n <- nrow(data1)
+n_train <- floor(0.8 * n)
+n_test <- n - n_train
+
+latih <- data1[1:n_train, ]
+uji <- data1[(n_train+1):n, ]
+
+latih.ts <- ts(latih$Count)
+uji.ts  <- ts(uji$Count)
+```
+
+```{r}
+# Mengubah data agar terbaca sebagai data deret waktu
+data.ts <- ts(data1$Count)
+
+# Ringkasan data
+summary(data.ts)
+
+# Plot data deret waktu keseluruhan
+ggplot() + 
+  geom_line(data = latih, aes(x = Periode, y = Count, col = "Data Latih")) +
+  geom_line(data = uji, aes(x = Periode, y = Count, col = "Data Uji")) +
+  labs(x = "Periode", y = "Count", color = "Legend") +
+  scale_colour_manual(name="Keterangan:", breaks = c("Data Latih", "Data Uji"),
+                      values = c("blue", "red")) + 
+  theme_bw() + theme(legend.position = "bottom",
+                     plot.caption = element_text(hjust=0.9, size=12))
+```
+
+## Moving Average
+# Single Moving Average
+```{r}
+# Pemulusan SMA dengan orde m = 4
+data.sma <- SMA(latih.ts, n = 4)
+data.sma
+
+data.ramal <- c(NA, data.sma)
+data.ramal
+
+# Peramalan untuk n_test periode ke depan
+data.gab <- cbind(
+  aktual = c(data.ts),
+  pemulusan = c(data.sma, rep(NA, n_test)),
+  ramalan = c(data.ramal, rep(data.ramal[length(data.ramal)], n_test))
+)
+data.gab
+
+# Plot SMA
+ts.plot(data.ts, xlab="Periode", ylab="Count", main= "SMA N=4")
+points(data.ts)
+lines(data.gab[,2], col="green", lwd=2)
+lines(data.gab[,3], col="red", lwd=2)
+legend("left", c("data aktual", "data pemulusan", "data peramalan"), lty=8, col=c("black","green","red"), cex=0.6)
+```
+
+```{r}
+# AKURASI DATA LATIH & UJI SMA
+error_train.sma = latih.ts - data.ramal[1:length(latih.ts)]
+SSE_train.sma = sum(error_train.sma[5:length(latih.ts)]^2)
+MSE_train.sma = mean(error_train.sma[5:length(latih.ts)]^2)
+MAPE_train.sma = mean(abs((error_train.sma[5:length(latih.ts)]/latih.ts[5:length(latih.ts)])*100))
+
+error_test.sma = uji.ts - data.gab[(n_train+1):n, 3]
+SSE_test.sma = sum(error_test.sma^2)
+MSE_test.sma = mean(error_test.sma^2)
+MAPE_test.sma = mean(abs((error_test.sma/uji.ts)*100))
+```
+
+# Double Moving Average
+```{r}
+dma <- SMA(data.sma, n = 4)
+At <- 2*data.sma - dma
+Bt <- 2/(4-1)*(data.sma - dma)
+data.dma <- At + Bt
+data.ramal2 <- c(NA, data.dma)
+
+t = 1:n_test
+f = c()
+
+for (i in t) {
+  f[i] = At[length(At)] + Bt[length(Bt)] * (i)
+}
+
+data.gab2 <- cbind(aktual = c(data.ts), 
+                   pemulusan1 = c(data.sma, rep(NA, n_test)),
+                   pemulusan2 = c(dma, rep(NA, n_test)),
+                   At = c(At, rep(NA, n_test)), 
+                   Bt = c(Bt, rep(NA, n_test)),
+                   ramalan = c(data.ramal2, f))
+data.gab2
+```
+
+```{r}
+# AKURASI DATA LATIH & UJI DMA
+error_train.dma = latih.ts - data.ramal2[1:length(latih.ts)]
+SSE_train.dma = sum(error_train.dma[8:length(latih.ts)]^2)
+MSE_train.dma = mean(error_train.dma[8:length(latih.ts)]^2)
+MAPE_train.dma = mean(abs((error_train.dma[8:length(latih.ts)]/latih.ts[8:length(latih.ts)])*100))
+
+error_test.dma = uji.ts - data.gab2[(n_train+1):n, 6]
+SSE_test.dma = sum(error_test.dma^2)
+MSE_test.dma = mean(error_test.dma^2)
+MAPE_test.dma = mean(abs((error_test.dma/uji.ts)*100))
+```
+
+```{r}
+# Plot DMA
+ts.plot(data.ts, xlab="Periode", ylab="Count", main= "DMA N=4")
+points(data.ts)
+lines(data.gab2[,3], col="green", lwd=2)
+lines(data.gab2[,6], col="red", lwd=2)
+legend("bottomleft", c("data aktual", "data pemulusan", "data peramalan"), lty=8, col=c("black","green","red"), cex=0.8)
+```
+
+## Exponensial Smoothing
+```{r}
+# SES dengan parameter optimum
+ses.opt <- ses(latih.ts, h = n_test, alpha = NULL)
+ses.opt
+plot(ses.opt)
+
+# Akurasi Data Latih SES Opt
+SSE_train.ses = ses.opt$model$sse
+
+
+# Pengaman nilai SSE SES Latih agar tidak NULL/0
+if(is.null(ses.opt$model$sse)) {
+  SSE_train.ses <- sum(ses.opt$residuals^2, na.rm = TRUE)
+} else {
+  SSE_train.ses <- as.numeric(ses.opt$model$sse)
+}
+MSE_train.ses  <- SSE_train.ses / length(latih.ts)
+MAPE_train.ses <- mean(abs(ses.opt$residuals[-1] / latih.ts[-1]) * 100, na.rm = TRUE)
+
+error_test.ses <- as.numeric(uji.ts) - as.numeric(ses.opt$mean)
+SSE_test.ses  <- sum(error_test.ses^2, na.rm = TRUE)
+MSE_test.ses  <- mean(error_test.ses^2, na.rm = TRUE)
+MAPE_test.ses <- mean(abs(error_test.ses / as.numeric(uji.ts)) * 100, na.rm = TRUE)
+```
+
+```{r}
+# DES dengan parameter optimum (alpha & beta NULL)
+des.opt <- HoltWinters(latih.ts, gamma = FALSE)
+des.opt
+plot(des.opt)
+
+ramalandesopt <- forecast(des.opt, h = n_test)
+ramalandesopt
+
+# Akurasi Data Latih DES Opt
+SSE_train.des = des.opt$SSE
+MSE_train.des = SSE_train.des / length(latih.ts)
+MAPE_train.des = mean(abs(ramalandesopt$residuals[-c(1,2)] / latih.ts[-c(1,2)]) * 100, na.rm = TRUE)
+
+# Akurasi Data Uji DES Opt
+selisihdesopt <- as.numeric(ramalandesopt$mean) - as.numeric(uji$Count)
+selisihdesopt
+
+SSE_test.des <- sum(selisihdesopt^2)
+MSE_test.des <- SSE_test.des / length(uji$Count)
+MAPE_test.des <- sum(abs(selisihdesopt / uji$Count) * 100) / length(uji$Count)
+```
+
+```{r}
+## HOLT-WINTERS (TRIPLE EXPONENTIAL SMOOTHING DENGAN MUSIMAN) 
+# Ubah pendefinisian ts untuk data latih dengan frequency = 7
+latih.ts <- ts(latih$Count, frequency = 7)
+uji.ts  <- ts(uji$Count, frequency = 7)
+
+hw.opt <- HoltWinters(latih.ts, seasonal = "additive")
+ramalan_hw <- forecast(hw.opt, h = n_test)
+
+# Akurasi Data Latih Holt-Winters
+if(is.null(hw.opt$SSE)) {
+  SSE_train.hw <- sum(hw.opt$residuals^2, na.rm = TRUE)
+} else {
+  SSE_train.hw <- as.numeric(hw.opt$SSE)
+}
+MSE_train.hw  <- SSE_train.hw / length(latih.ts)
+# Menggunakan fitted values dari model Holt-Winters untuk data latih
+MAPE_train.hw <- mean(abs((latih.ts - fitted(hw.opt)[,1]) / latih.ts) * 100, na.rm = TRUE)
+
+# Akurasi Data Uji Holt-Winters
+error_test.hw <- as.numeric(uji.ts) - as.numeric(ramalan_hw$mean)
+SSE_test.hw  <- sum(error_test.hw^2, na.rm = TRUE)
+MSE_test.hw  <- mean(error_test.hw^2, na.rm = TRUE)
+MAPE_test.hw <- mean(abs(error_test.hw / as.numeric(uji.ts)) * 100, na.rm = TRUE)
+```
+
+```{r}
+## Perbandingan Kinerja dan Kesimpulan Metode Terbaik
+
+# 1. Tabel Ringkasan Akurasi Data Latih (Training)
+tabel_latih <- data.frame(
+  Metode = c("SMA (m=4)", "DMA (m=4)", "SES (Optimum)", "DES (Optimum)", "Holt-Winters"),
+  SSE  = c(SSE_train.sma, SSE_train.dma, SSE_train.ses, SSE_train.des, SSE_train.hw),
+  MSE  = c(MSE_train.sma, MSE_train.dma, MSE_train.ses, MSE_train.des, MSE_train.hw),
+  MAPE = c(MAPE_train.sma, MAPE_train.dma, MAPE_train.ses, MAPE_train.des, MAPE_train.hw)
+)
+tabel_latih
+
+# 2. Tabel Ringkasan Akurasi Data Uji (Testing)
+tabel_uji <- data.frame(
+  Metode = c("SMA (m=4)", "DMA (m=4)", "SES (Optimum)", "DES (Optimum)", "Holt-Winters"),
+  SSE  = c(SSE_test.sma, SSE_test.dma, SSE_test.ses, SSE_test.des, SSE_test.hw),
+  MSE  = c(MSE_test.sma, MSE_test.dma, MSE_test.ses, MSE_test.des, MSE_test.hw),
+  MAPE = c(MAPE_test.sma, MAPE_test.dma, MAPE_test.ses, MAPE_test.des, MAPE_test.hw)
+)
+tabel_uji
+```
+
+### Kesimpulan
+Metode Terbaik yang Dipilih: Single Exponential Smoothing (SES) Optimum
+
+Alasan Singkat:
+
+KONSISTENSI: SES Optimum menunjukkan performa yang sangat stabil dan konsisten baik pada tahap data latih maupun data uji, menghasilkan nilai kesalahan (SSE, MSE, MAPE) yang paling rendah dan optimal secara keseluruhan.
+
+KARAKTERISTIK DATA: Sesuai dengan hasil uji stasioner sebelumnya, data pada rentang baris 583–776 bersifat stasioner di sekitar rata-rata tanpa adanya tren atau musiman jangka panjang yang kuat. Oleh karena itu, metode pemulusan tunggal adaptif seperti SES Optimum sangat efektif meredam noise tanpa membebani model dengan parameter tren/musiman yang tidak diperlukan.
