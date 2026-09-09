@@ -1,0 +1,193 @@
+---
+title: "Tugas MPDW - Pemodelan Regresi dengan Peubah Lag (Koyck, DLM, ARDL)"
+author: "Adi Pratama"
+date: "2026-09-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Tugas Individu
+
+**Instruksi:**
+
+1.  Gunakan dataset kualitas udara pada Google Drive: [[Link GDrive]](https://drive.google.com/drive/folders/18ZcJpGKzmwlw9zxGZjTtVnJV0Ufau23g?usp=drive_link)
+
+2.  Tetapkan AQI sebagai variabel dependen (Y), lalu pilih satu variabel polutan (CO, NO₂, O₃, PM10, PM2.5, atau SO₂) sebagai variabel independen (X).
+
+3.  Terapkan ketiga metode regresi dengan peubah lag yang sudah dipelajari (Koyck, DLM, dan ARDL). Tentukan lag optimum untuk masing-masing metode!
+
+4.  Lakukan evaluasi asumsi model dan bandingkan kinerja peramalan menggunakan metrik akurasi (MAPE) serta visualisasi grafik.
+
+5.  *Upload* *dataset* dan tugas per individu ke GitHub pada folder `Pertemuan-3` dengan format HTML bernama: `Tugas-Pertemuan-3.html` dan `.Rmd`.
+
+6.  **Deadline Pengumpulan:** Kamis, 10 September 2026, 23.59 WIB.
+
+## 1. Persiapan Data
+
+### *Packages*
+```{r}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+library(tseries)
+```
+
+### Impor & Pembagian Data
+
+Kita akan menggunakan data New Delhi untuk melatih pemodelan. Data dibagi menjadi data Training (untuk membentuk model) dan data Testing (untuk menguji akurasi ramalan).
+
+```{r}
+# Impor Data (sesuaikan path file jika diperlukan)
+data_raw <- read.csv("NewDelhi_Air_quality.csv")
+data_raw
+
+# Memilih kolom yang relevan: AQI sebagai Y dan PM2.5 sebagai X
+# Pastikan nama kolom sesuai dengan header di file CSV Anda (misal: AQI dan PM2.5)
+data <- data.frame(
+  Yt = data_raw$AQI,
+  Xt = data_raw$pm25
+)
+
+# Cek struktur data
+head(data)
+str(data)
+
+# Membagi data menjadi Training (56 observasi) dan Testing (16 observasi) dari total 72 baris
+train <- data[1:56, ]
+test <- data[57:72, ]
+```
+
+## 2. Model Koyck
+
+### Pemodelan
+
+```{r}
+# Membangun Model Koyck
+model.koyck <- koyckDlm(x = train$Xt, y = train$Yt)
+summary(model.koyck)
+```
+
+**Interpretasi:**
+
+- **Untuk peubah** $Y_{t-1}$ ($p\text{-value} < 2 \times 10^{-16}$): Karena nilainya jauh di bawah $0.05$, maka $Y_{t-1}$ berpengaruh sangat signifikan terhadap $Y_t$. Ini berarti kondisi AQI di masa lalu ($\lambda$) memiliki peran yang sangat kuat dalam menentukan AQI hari ini.
+
+<!-- -->
+
+- **Untuk peubah** $X_t$ / PM2.5 ($p\text{-value} = 0.0428$): Karena nilainya $0.0428$ (di bawah $0.05$), maka $X_t$ juga berpengaruh signifikan terhadap $Y_t$. Artinya, tingkat polutan PM2.5 saat ini berdampak langsung secara nyata terhadap AQI.
+
+Jadi, **karena kedua peubah tersebut memiliki *p-value*** $< 0.05$, maka keduanya terbukti berpengaruh signifikan
+
+**Persamaan:**
+
+$$\hat{Y_t}=4.17635 - 0.57288X_t+ 0.86814Y_{t-1}$$
+
+### Peramalan
+
+```{r}
+# Meramalkan 16 periode ke depan
+fore.koyck <- forecast(model = model.koyck, x = test$Xt, h = 16)
+fore.koyck
+
+# Cek Akurasi (MAPE) pada data testing
+mape.koyck <- MAPE(fore.koyck$forecasts, test$Yt)
+cat("MAPE Model Koyck:", mape.koyck, "\n")
+```
+
+## 3. Regression with Distributed Lag (DLM)
+
+### Penentuan *Lag* Optimum
+
+Untuk menghindari coba-coba, kita bisa mencari nilai $q$ terbaik berdasarkan nilai *Akaike Information Criterion (AIC)* terkecil menggunakan fungsi `finiteDLMauto()`.
+
+```{r}
+# Pencarian q optimum dari q.min = 1 hingga q.max = 8
+finiteDLMauto(formula = Yt ~ Xt, 
+              data = data.frame(train), 
+              q.min = 1, q.max = 8, 
+              model.type = "dlm", 
+              error.type = "AIC", 
+              trace = TRUE)
+```
+
+**Interpretasi:** Pilih baris dengan nilai AIC yang paling kecil. Lag optimum berada pada $q=8$, kita bangun ulang modelnya:
+
+```{r}
+# Membangun ulang DLM dengan Lag Optimum (q=6)
+model.dlm.opt <- dlm(x = train$Xt, y = train$Yt, q = 8)
+summary(model.dlm.opt)
+
+# Peramalan model DLM Optimum
+fore.dlm.opt <- forecast(model = model.dlm.opt, x = test$Xt, h = 16)
+mape.dlm.opt <- MAPE(fore.dlm.opt$forecasts, test$Yt)
+cat("MAPE Model DLM Optimum (q=8):", mape.dlm.opt * 100, "%\n")
+```
+
+## 4. Autoregressive Distributed Lag (ARDL)
+
+### *Lag* Optimum ARDL
+
+Kita bisa mencari kombinasi $p$ dan $q$ terbaik dengan fungsi `ardlBoundOrders()`.
+
+```{r}
+# Mencari kombinasi lag optimum berdasarkan AIC
+model.ardl.opt <- ardlBoundOrders(data = data.frame(data), ic = "AIC", formula = Yt ~ Xt)
+
+# Menentukan p dan q optimum secara otomatis
+min_p <- c()
+for(i in 1:4){
+  min_p[i] <- min(model.ardl.opt$Stat.table[[i]], na.rm = TRUE)
+}
+q_opt_ardl <- which(min_p == min(min_p, na.rm = TRUE))
+p_opt_ardl <- which(model.ardl.opt$Stat.table[[q_opt_ardl]] == min(model.ardl.opt$Stat.table[[q_opt_ardl]], na.rm = TRUE))
+
+cat("Lag Optimum ARDL -> p (untuk X):", p_opt_ardl, "| q (untuk Y):", q_opt_ardl, "\n")
+```
+
+```{r}
+# Membangun Model ARDL Optimum pada data training
+model.ardl <- ardlDlm(formula = Yt ~ Xt, data = train, p = p_opt_ardl, q = q_opt_ardl)
+summary(model.ardl)
+
+# Peramalan ARDL
+fore.ardl <- forecast(model = model.ardl, x = test$Xt, h = 16)
+mape.ardl <- MAPE(fore.ardl$forecasts, test$Yt)
+cat("MAPE Model ARDL:", mape.ardl * 100, "%\n")
+```
+
+## Perbandingan Performa Model
+
+Mari kita bandingkan akurasi peramalan berdasarkan MAPE dan memvisualisasikannya.
+
+### Akurasi
+
+```{r}
+# Rekapitulasi MAPE
+akurasi <- data.frame(
+  Model = c("Koyck", "DLM Optimum", "ARDL Optimum"),
+  MAPE_Persen = c(mape.koyck * 100, mape.dlm.opt * 100, mape.ardl * 100)
+)
+print(akurasi)
+```
+
+```{r}
+# Plot perbandingan nilai aktual vs hasil ramalan ketiga model pada data testing
+plot(test$Yt, type = "l", col = "black", lwd = 2, ylim = range(c(test$Yt, fore.koyck$forecasts, fore.dlm.opt$forecasts, fore.ardl$forecasts)),
+     main = "Perbandingan Peramalan Model Lag vs Data Aktual", ylab = "AQI", xlab = "Periode Testing")
+lines(fore.koyck$forecasts, col = "blue", lwd = 2, lty = 2)
+lines(fore.dlm.opt$forecasts, col = "red", lwd = 2, lty = 3)
+lines(fore.ardl$forecasts, col = "green", lwd = 2, lty = 4)
+
+legend("bottomright", legend = c("Aktual", "Koyck", "DLM Optimum", "ARDL Optimum"),
+       col = c("black", "blue", "red", "green"), lty = c(1, 2, 3, 4), lwd = 2, cex = 0.8)
+```
+
+### Kesimpulan
+
+Model Distributed Lag Model (DLM) Optimum memberikan kinerja peramalan terbaik dibandingkan model lainnya, dengan nilai MAPE terendah yaitu 10,24%. Berdasarkan kriteria umum interpretasi nilai MAPE , performa DLM Optimum berada pada kategori baik dan akurat dalam memprediksi nilai AQI menggunakan data PM2.5.
+
+Diikuti oleh Model Koyck di posisi kedua dengan nilai MAPE sebesar 14,95%, yang juga masih menunjukkan kemampuan peramalan yang cukup baik. Sementara itu, Model ARDL Optimum memiliki tingkat kesalahan tertinggi dengan nilai MAPE sebesar 16,01%, meskipun secara umum masih berada dalam batas toleransi akurasi prediksi yang wajar untuk data deret waktu jangka pendek. Dengan demikian, **DLM Optimum** adalah model yang **paling direkomendasikan** untuk peramalan AQI **pada studi kasus ini**.
