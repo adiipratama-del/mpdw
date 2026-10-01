@@ -1,0 +1,871 @@
+---
+title: "Pemodelan ARIMA pada Data Beijing Air Quality"
+author: "Adi Pratama"
+date: "1 Oktober 2026"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    code_folding: hide
+    code_download: true
+    self_contained: true
+    fig_caption: true
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{=html}
+<style>
+body {
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.8;
+  color: #29465b;
+  background: #ffffff;
+}
+.main-container { max-width: 1200px !important; }
+#header {
+  background: linear-gradient(110deg, #355f70 0%, #657087 52%, #c45689 100%);
+  padding: 42px 34px 32px;
+  margin: 20px 0 34px;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(35, 58, 76, 0.14);
+}
+#header .title {
+  color: white;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 18px 0 0;
+  padding-bottom: 10px;
+  border-bottom: 3px solid rgba(255,255,255,.65);
+}
+#header .author, #header .date { color: white; }
+h1, h2, h3, h4 {
+  color: #173e59;
+  font-weight: 600;
+  line-height: 1.35;
+}
+h1:not(.title) {
+  font-size: 32px;
+  margin-top: 38px;
+  padding-bottom: 9px;
+  border-bottom: 3px solid #efa2c2;
+}
+h2 { font-size: 26px; margin-top: 30px; }
+h3 { font-size: 21px; margin-top: 24px; }
+#TOC {
+  font-size: 13px;
+  line-height: 1.55;
+  border: 1px solid #efb6cf;
+  border-radius: 7px;
+  background: white;
+}
+.tocify-item.active, .tocify-item.active:hover,
+.list-group-item.active {
+  color: white;
+  background: #bd4c80;
+  border-color: #bd4c80;
+}
+a { color: #a33768; }
+pre {
+  background: #f7f9fb;
+  border: 1px solid #dce5ec;
+  border-radius: 8px;
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+table {
+  width: 100%;
+  font-size: 14px;
+  margin: 18px 0 24px;
+}
+table th {
+  background: #f5e5ed;
+  color: #173e59;
+}
+table th, table td { padding: 10px 12px !important; }
+blockquote {
+  background: #f2f7fa;
+  border-left: 5px solid #54889b;
+  padding: 16px 20px;
+}
+@media (max-width: 767px) {
+  #header { padding: 26px 20px; }
+  #header .title { font-size: 28px; }
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  error = FALSE,
+  fig.width = 8.5,
+  fig.height = 5.4,
+  dpi = 140,
+  fig.align = "center",
+  out.width = "100%",
+  collapse = TRUE,
+  comment = "#>"
+)
+
+options(width = 90)
+```
+
+# Pendahuluan
+
+Analisis pada tugas ini menggunakan data **Beijing Air Quality** untuk
+membangun model **ARIMA.** Variabel yang dimodelkan adalah nilai median
+konsentrasi **PM2.5** harian.
+
+Tahapan analisis mengikuti alur pemodelan deret waktu pada praktikum,
+yaitu:
+
+1.  pembagian data menjadi data train dan test;
+2.  pemeriksaan stasioneritas dalam rataan menggunakan ACF dan ADF;
+3.  pemeriksaan stasioneritas dalam ragam menggunakan Box-Cox;
+4.  transformasi dan/atau differencing apabila diperlukan;
+5.  identifikasi model potensial menggunakan ACF, PACF, dan EACF;
+6.  pendugaan parameter dan pemilihan model berdasarkan signifikansi
+    parameter serta AIC;
+7.  analisis sisaan;
+8.  pemeriksaan overfitting;
+9.  peramalan dan evaluasi hasil forecast.
+
+# Packages
+
+```{r packages}
+library (readxl)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(forecast)
+library(tseries)
+library(TSA)
+library(MASS)
+library(lmtest)
+library(car)
+```
+
+# Data dan Persiapan
+
+## Import Data
+
+```{r}
+data_raw <- read_csv(
+  "Beijing Air Quality Data 2024-2026.csv",
+  show_col_types = FALSE
+)
+
+str(data_raw)
+head(data_raw)
+```
+
+Data kemudian diperiksa untuk mengetahui struktur variabel, periode
+pengamatan, dan kemungkinan adanya tanggal yang terduplikasi.
+
+```{r}
+cat("Jumlah baris awal :", nrow(data_raw), "\n")
+cat("Jumlah kolom      :", ncol(data_raw), "\n")
+cat("Jumlah tanggal unik:", length(unique(data_raw$Date)), "\n")
+```
+
+## Persiapan Variabel
+
+Pada analisis ARIMA ini akan digunakan variabel `median` PM2.5 pada
+setiap tanggal.
+
+```{r}
+data <- data_raw %>%
+  mutate(Date = as.Date(Date, format = "%d/%m/%Y")) %>%
+  arrange(Date)
+
+# Cek jumlah tanggal duplikat
+jumlah_duplikat <- sum(duplicated(data$Date))
+jumlah_duplikat
+```
+
+```{r}
+data <- data %>%
+  distinct(Date, .keep_all = TRUE) %>%
+  dplyr::select(Date, median)
+
+# Pastikan data tersusun berdasarkan waktu
+data <- data %>%
+  arrange(Date)
+
+summary(data)
+```
+
+Setelah tanggal duplikat dihapus, data yang digunakan dalam analisis
+merupakan satu observasi untuk setiap tanggal dan berjumlah 966.
+
+```{r}
+cat("Jumlah observasi :", nrow(data), "\n")
+cat("Tanggal awal     :", format(min(data$Date)), "\n")
+cat("Tanggal akhir    :", format(max(data$Date)), "\n")
+cat("NA pada median   :", sum(is.na(data$median)), "\n")
+```
+
+Apabila masih terdapat nilai hilang pada variabel yang digunakan, nilai
+tersebut perlu ditangani sebelum membentuk objek deret waktu.
+
+```{r}
+data <- data %>%
+  filter(!is.na(median))
+```
+
+# Eksplorasi Data
+
+## Statistik Deskriptif
+
+```{r}
+summary(data$median)
+
+deskriptif <- data.frame(
+  Mean = mean(data$median),
+  Median = median(data$median),
+  SD = sd(data$median),
+  Minimum = min(data$median),
+  Maximum = max(data$median)
+)
+
+deskriptif
+```
+
+## Plot Deret Waktu
+
+```{r}
+ggplot(data, aes(x = Date, y = median)) +
+  geom_line(linewidth = 0.6) +
+  labs(
+    title = "Deret Waktu Median PM2.5 Harian",
+    x = "Tanggal",
+    y = "Median PM2.5"
+  ) +
+  theme_minimal()
+```
+
+Plot ini digunakan sebagai pemeriksaan awal untuk melihat pola data,
+kecenderungan, perubahan ragam, serta kemungkinan pola musima.
+
+## Pembagian Data Train dan Test
+
+Data dibagi menjadi data train dan data test. Pada analisis ini
+digunakan 20% observasi terakhir sebagai data test, sedangkan 80%
+observasi awal digunakan sebagai data train.
+
+```{r}
+test_size <- floor(0.20 * nrow(data))
+
+train <- data %>%
+  slice(1:(n() - test_size))
+
+test <- data %>%
+  slice((n() - test_size + 1):n())
+
+cat("Jumlah train :", nrow(train), "\n")
+cat("Jumlah test  :", nrow(test), "\n")
+cat("Proporsi train:", round(nrow(train) / nrow(data) * 100, 2), "%\n")
+cat("Proporsi test :", round(nrow(test) / nrow(data) * 100, 2), "%\n")
+```
+
+```{r}
+train.ts <- ts(train$median)
+test.ts <- ts(test$median)
+data.ts <- ts(data$median)
+```
+
+## Plot Data Train dan Test
+
+```{r}
+ggplot(data, aes(x = Date, y = median)) +
+  geom_line(linewidth = 0.5) +
+  geom_vline(
+    xintercept = as.numeric(min(test$Date)),
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  labs(
+    title = "Pembagian Data Train dan Test",
+    subtitle = "Garis putus-putus menunjukkan awal periode data test",
+    x = "Tanggal",
+    y = "Median PM2.5"
+  ) +
+  theme_minimal()
+```
+
+Data train digunakan untuk seluruh proses identifikasi dan estimasi
+model. Data test disimpan dan tidak digunakan dalam pembentukan model,
+sehingga dapat digunakan untuk mengevaluasi kemampuan model dalam
+melakukan peramalan di luar sampel.
+
+# Pemeriksaan Stasioneritas
+
+## Stasioneritas dalam Rataan: ACF
+
+```{r}
+acf(train.ts,
+    main = "ACF Data Train",
+    lag.max = 40)
+```
+
+ACF menunjukkan adanya korelasi serial yang cukup kuat pada beberapa lag
+awal dengan pola peluruhan secara bertahap. Pola tersebut menjadi
+indikasi awal adanya ketergantungan antarwaktu pada data, namun
+keputusan mengenai stasioneritas rataan ditentukan melalui uji ADF.
+
+## Uji ADF
+
+Hipotesis yang digunakan:
+
+$$H_0:\text{ data tidak stasioner dalam rataan}$$
+
+$$H_1:\text{ data stasioner dalam rataan}$$
+
+```{r}
+adf_level <- tseries::adf.test(train.ts)
+adf_level
+```
+
+Berdasarkan uji Augmented Dickey-Fuller (ADF), diperoleh statistik uji
+sebesar −6,2086 dengan *p-value* 0,01. Karena *p-value* \< 0,05, maka H₀
+ditolak sehingga data **stasioner dalam rataan**. Oleh karena itu, tidak
+diperlukan differencing, sehingga d=0.
+
+## Stasioneritas dalam Ragam: Box-Cox
+
+Pemeriksaan stasioneritas dalam ragam dilakukan menggunakan transformasi
+Box-Cox.
+
+```{r}
+index_train <- seq_along(train.ts)
+
+bc <- MASS::boxcox(
+  train.ts ~ index_train,
+  lambda = seq(-1, 2, by = 0.01)
+)
+
+lambda_opt <- bc$x[which.max(bc$y)]
+
+ci_lambda <- bc$x[
+  bc$y > max(bc$y) - 0.5 * qchisq(0.95, df = 1)
+]
+
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+hasil_boxcox <- data.frame(
+  Lambda_Optimum = lambda_opt,
+  CI_95_Bawah = ci_lower,
+  CI_95_Atas = ci_upper,
+  CI_Mengandung_1 = ci_lower <= 1 & ci_upper >= 1
+)
+
+hasil_boxcox
+```
+
+## Keputusan Transformasi Ragam
+
+```{r}
+if (ci_lower <= 1 && ci_upper >= 1) {
+  cat("CI 95% lambda mengandung 1 -> transformasi ragam tidak diperlukan.\n")
+} else {
+  cat("CI 95% lambda tidak mengandung 1 -> transformasi ragam perlu dipertimbangkan.\n")
+}
+```
+
+Berdasarkan metode Box-Cox, diperoleh nilai lambda optimum sebesar
+**0,28** dengan interval kepercayaan 95% sebesar **[0,17; 0,38]**.
+Interval tersebut tidak mengandung nilai 1, sehingga data belum
+stasioner dalam ragam. Oleh karena itu, dilakukan transformasi Box-Cox
+dengan λ=0,28 sebelum tahap identifikasi model ARIMA.
+
+# Penanganan Ketidakstasioneran
+
+## Transformasi Box Cox (λ=0,28)
+
+```{r}
+# Transformasi Box-Cox
+lambda <- 0.28
+
+train_bc <- forecast::BoxCox(train.ts, lambda = lambda)
+
+# Melihat hasil transformasi
+head(train_bc)
+```
+
+```{r}
+# Plot sebelum transformasi
+plot(
+  train.ts,
+  type = "l",
+  main = "Data Train Sebelum Transformasi Box-Cox",
+  xlab = "Waktu",
+  ylab = "Median PM2.5"
+)
+
+# Plot setelah transformasi
+plot(
+  train_bc,
+  type = "l",
+  main = "Data Train Setelah Transformasi Box-Cox",
+  xlab = "Waktu",
+  ylab = "PM2.5 Tertransformasi"
+)
+```
+
+# Identifikasi Model ARIMA
+
+Identifikasi model dilakukan menggunakan ACF, PACF, dan EACF. Parameter
+$d$ ditentukan berdasarkan hasil pemeriksaan stasioneritas sebelumnya.
+
+## ACF
+
+```{r}
+acf(
+  train_bc,
+  lag.max = 40,
+  main = "ACF Data Setelah Transformasi Box-Cox"
+)
+
+```
+
+ACF digunakan untuk membantu mengidentifikasi orde MA(q). Pola *cut-off*
+pada ACF dapat mengindikasikan orde MA, sedangkan pola *tailing off*
+dapat mengarah pada komponen AR.
+
+## PACF
+
+```{r}
+pacf(
+  train_bc,
+  lag.max = 40,
+  main = "PACF Data Setelah Transformasi Box-Cox"
+)
+```
+
+PACF digunakan untuk membantu mengidentifikasi orde AR(p). Pola
+*cut-off* pada PACF dapat mengindikasikan orde AR.
+
+## Extended ACF (EACF)
+
+```{r}
+TSA::eacf(train_bc)
+```
+
+EACF digunakan sebagai informasi tambahan untuk menentukan beberapa
+kandidat model ARMA pada data yang telah stasioner. Nilai $d$ tetap
+mengikuti hasil pemeriksaan stasioneritas sebelumnya.
+
+## Kandidat Model
+
+Berdasarkan plot ACF, terlihat pola penurunan bertahap pada beberapa lag
+awal yang mengindikasikan adanya komponen autoregresif. Plot PACF
+menunjukkan spike yang signifikan hingga lag ke-2 dan kemudian relatif
+berada dalam batas interval kepercayaan, sehingga kandidat orde
+autoregresif adalah p=2. Hasil EACF memberikan indikasi orde moving
+average q=2. Dengan d=0, model yang dipertimbangkan pada tahap awal
+adalah ARIMA(2,0,2).
+
+# Pendugaan Parameter dan Pemilihan Model
+
+Setelah kandidat model ditentukan, masing-masing model diestimasi
+menggunakan fungsi `Arima()`.
+
+```{r}
+# Estimasi model kandidat
+model_101 <- forecast::Arima(
+  train_bc, order = c(1, 0, 1), method = "ML")
+
+model_102 <- forecast::Arima(
+  train_bc, order = c(1, 0, 2), method = "ML")
+
+model_201 <- forecast::Arima(
+  train_bc, order = c(2, 0, 1), method = "ML")
+
+model_202 <- forecast::Arima(
+  train_bc, order = c(2, 0, 2), method = "ML")
+
+# Ringkasan model
+summary(model_101)
+summary(model_102)
+summary(model_201)
+summary(model_202)
+```
+
+## Ringkasan AIC dan BIC
+
+Setelah model kandidat dijalankan, hasilnya diringkas agar mudah
+dibandingkan.
+
+```{r}
+hasil_model <- data.frame(
+  Model = c(
+    "ARIMA(1,0,1)",
+    "ARIMA(1,0,2)",
+    "ARIMA(2,0,1)",
+    "ARIMA(2,0,2)"
+  ),
+  AIC = c(
+    AIC(model_101),
+    AIC(model_102),
+    AIC(model_201),
+    AIC(model_202)
+  ),
+  BIC = c(
+    BIC(model_101),
+    BIC(model_102),
+    BIC(model_201),
+    BIC(model_202)
+  )
+)
+
+hasil_model[order(hasil_model$AIC), ]
+```
+
+```{r}
+lmtest::coeftest(model_101)
+lmtest::coeftest(model_102)
+lmtest::coeftest(model_201)
+lmtest::coeftest(model_202)
+```
+
+Jadi ARIMA(1,0,2) saat ini merupakan kandidat yang paling kuat untuk
+dilanjutkan, karena:
+
+-  AIC paling kecil
+
+-  BIC paling kecil
+
+-  seluruh parameternya signifikan
+
+## Model Terpilih
+
+Setelah membandingkan seluruh kandidat, masukkan model terpilih pada
+bagian berikut.
+
+```{r}
+# Model terpilih sementara
+model_final <- model_102
+```
+
+Model terbaik kemudian digunakan pada tahap diagnostik, overfitting, dan
+peramalan.
+
+# Analisis Sisaan
+
+Model ARIMA yang baik diharapkan menghasilkan sisaan yang menyerupai
+*white noise*, yaitu tidak memiliki autokorelasi yang tersisa.
+
+## Eksplorasi Sisaan
+
+```{r}
+# Sisaan model
+sisaan <- residuals(model_final)
+
+par(mfrow = c(2, 2))
+
+# Q-Q Plot
+qqnorm(sisaan, main = "Normal Q-Q Plot Sisaan")
+qqline(sisaan, lwd = 2)
+
+# Sisaan terhadap waktu
+plot(
+  sisaan,
+  type = "p",
+  main = "Sisaan terhadap Waktu",
+  xlab = "Waktu",
+  ylab = "Sisaan"
+)
+
+# ACF sisaan
+acf(
+  sisaan,
+  main = "ACF Sisaan"
+)
+
+# PACF sisaan
+pacf(
+  sisaan,
+  main = "PACF Sisaan"
+)
+
+par(mfrow = c(1, 1))
+```
+
+> Secara eksploratif, ACF dan PACF sisaan digunakan untuk melihat apakah
+> masih terdapat autokorelasi. Q-Q plot digunakan untuk melihat
+> kedekatan distribusi sisaan dengan distribusi normal, sedangkan plot
+> sisaan terhadap waktu membantu melihat pola dan perubahan ragam.
+
+## Uji Ljung-Box
+
+Hipotesis:
+
+$$H_0:\text{ tidak terdapat autokorelasi pada sisaan}$$
+
+$$H_1:\text{ terdapat autokorelasi pada sisaan}$$
+
+```{r}
+Box.test(
+  sisaan,
+  lag = 20,
+  type = "Ljung-Box"
+)
+```
+
+> *p-value* \> 0,05, maka tidak terdapat bukti yang cukup untuk
+> menyatakan adanya autokorelasi pada sisaan.
+
+## Uji Normalitas
+
+```{r}
+shapiro.test(sisaan)
+```
+
+Uji ini digunakan sebagai pemeriksaan tambahan terhadap distribusi
+sisaan.
+
+> Berdasarkan uji Shapiro-Wilk, diperoleh statistik uji sebesar 0.97774
+> dengan p-value \< 0.05. Dengan demikian, H0 ditolak, sehingga terdapat
+> bukti bahwa sisaan model ARIMA(1,0,2) tidak berdistribusi normal.
+
+# Overfitting
+
+Overfitting dilakukan dengan menambahkan satu orde AR atau MA terhadap
+model terbaik. Tujuannya adalah memeriksa apakah penambahan parameter
+menghasilkan model yang lebih baik.
+
+Model terbaik adalah ARIMA(1, 0, 2), maka kandidat overfitting dapat
+berupa:
+
+- Naikkan p: **ARIMA(2,0,2)**
+
+- Naikkan q: **ARIMA(1,0,3)**
+
+Kode berikut merupakan template yang harus disesuaikan dengan model
+terpilih.
+
+```{r}
+# Model overfitting
+model_overfit_p <- forecast::Arima(
+  train_bc,
+  order = c(2, 0, 2),
+  method = "ML"
+)
+
+model_overfit_q <- forecast::Arima(
+  train_bc,
+  order = c(1, 0, 3),
+  method = "ML"
+)
+```
+
+```{r}
+hasil_overfit <- data.frame(
+  Model = c(
+    "ARIMA(1,0,2)",
+    "ARIMA(2,0,2)",
+    "ARIMA(1,0,3)"
+  ),
+  AIC = c(
+    AIC(model_102),
+    AIC(model_overfit_p),
+    AIC(model_overfit_q)
+  ),
+  BIC = c(
+    BIC(model_102),
+    BIC(model_overfit_p),
+    BIC(model_overfit_q)
+  )
+)
+
+hasil_overfit[order(hasil_overfit$AIC), ]
+```
+
+```{r}
+lmtest::coeftest(model_overfit_p)
+lmtest::coeftest(model_overfit_q)
+```
+
+### Kesimpulan overfitting
+
+Jadi, penambahan orde pada model ARIMA(1,0,2) tidak memberikan
+perbaikan. Kedua model overfit memiliki parameter tambahan yang tidak
+signifikan serta AIC dan BIC yang lebih besar.
+
+> Dengan demikian, model ARIMA(1,0,2) dipertahankan sebagai model yang
+> dipilih.
+
+Ini juga konsisten dengan hasil sebelumnya: ARIMA(1,0,2) memiliki AIC
+dan BIC paling kecil di antara kandidat yang diuji dan seluruh
+parameternya signifikan.
+
+# Peramalan
+
+## Forecast Data Test
+
+Setelah model akhir ditetapkan, dilakukan peramalan sebanyak jumlah
+observasi pada data test.
+
+```{r}
+# Forecast sebanyak jumlah data test
+forecast_final <- forecast::forecast(
+  model_final,
+  h = nrow(test)
+)
+
+forecast_final
+```
+
+## Plot Forecast
+
+```{r}
+plot(
+  forecast_final,
+  main = "Forecast ARIMA(1,0,2)",
+  xlab = "Waktu",
+  ylab = "PM2.5 Tertransformasi"
+)
+```
+
+## Perbandingan Aktual dan Forecast
+
+```{r}
+lambda <- 0.28
+
+# Forecast mean dikembalikan ke skala asli
+forecast_original <- forecast::InvBoxCox(
+  forecast_final$mean,
+  lambda = lambda
+)
+
+# Interval prediksi dikembalikan ke skala asli
+lower_original <- forecast::InvBoxCox(
+  forecast_final$lower,
+  lambda = lambda
+)
+
+upper_original <- forecast::InvBoxCox(
+  forecast_final$upper,
+  lambda = lambda
+)
+```
+
+## Plot Aktual vs Forecast
+
+```{r}
+hasil_forecast <- data.frame(
+  Date = test$Date,
+  Aktual = test$median,
+  Forecast = as.numeric(forecast_original),
+  Lower_95 = as.numeric(lower_original[, 1]),
+  Upper_95 = as.numeric(upper_original[, 1])
+)
+
+head(hasil_forecast)
+
+ggplot(hasil_forecast, aes(x = Date)) +
+  geom_line(
+    aes(y = Aktual),
+    linewidth = 0.8
+  ) +
+  geom_line(
+    aes(y = Forecast),
+    linewidth = 0.8,
+    linetype = "dashed"
+  ) +
+  geom_ribbon(
+    aes(
+      ymin = Lower_95,
+      ymax = Upper_95
+    ),
+    alpha = 0.2
+  ) +
+  labs(
+    title = "Peramalan PM2.5 dengan ARIMA(1,0,2)",
+    subtitle = "Perbandingan nilai aktual dan hasil forecast pada data testing",
+    x = "Tanggal",
+    y = "Median PM2.5"
+  ) +
+  theme_minimal()
+```
+
+## Akurasi Forecast
+
+```{r}
+MAE <- mean(
+  abs(hasil_forecast$Aktual - hasil_forecast$Forecast),
+  na.rm = TRUE
+)
+
+RMSE <- sqrt(
+  mean(
+    (hasil_forecast$Aktual - hasil_forecast$Forecast)^2,
+    na.rm = TRUE
+  )
+)
+
+MAPE <- mean(
+  abs(
+    (hasil_forecast$Aktual - hasil_forecast$Forecast) /
+      hasil_forecast$Aktual
+  ),
+  na.rm = TRUE
+) * 100
+
+akurasi <- data.frame(
+  MAE = MAE,
+  RMSE = RMSE,
+  MAPE = MAPE
+)
+
+akurasi
+```
+
+> Nilai MAE sebesar 34,65, RMSE sebesar 44,66, dan MAPE sebesar 59,12%
+> menunjukkan besarnya kesalahan peramalan pada data testing.
+
+# Kesimpulan
+
+Berdasarkan hasil pemodelan deret waktu data median PM2.5, diperoleh
+bahwa data train telah stasioner dalam rataan berdasarkan uji Augmented
+Dickey-Fuller (ADF) dengan p-value sebesar 0,01 \< 0,05, sehingga tidak
+diperlukan differencing dan diperoleh orde d = 0. Namun, data belum
+stasioner dalam ragam karena interval kepercayaan 95% lambda Box-Cox
+sebesar [0,17; 0,38] tidak mengandung nilai 1. Oleh karena itu,
+dilakukan transformasi Box-Cox dengan lambda sebesar 0,28.
+
+Berdasarkan identifikasi ACF, PACF, dan EACF, diperoleh beberapa model
+kandidat ARIMA. Setelah mempertimbangkan signifikansi parameter serta
+nilai AIC dan BIC, model ARIMA(1,0,2) dipilih dengan AIC sebesar
+3084,487 dan BIC sebesar 3107,739. Seluruh parameter model tersebut
+signifikan secara statistik.
+
+Hasil analisis sisaan menunjukkan bahwa sisaan tidak berdistribusi
+normal berdasarkan uji Shapiro-Wilk. Namun, uji Ljung-Box menghasilkan
+p-value sebesar 0,7449 \> 0,05, sehingga tidak terdapat bukti adanya
+autokorelasi pada sisaan. Dengan demikian, sisaan telah memenuhi
+karakteristik white noise dari aspek autokorelasi.
+
+Hasil overfitting dengan model ARIMA(2,0,2) dan ARIMA(1,0,3) menunjukkan
+bahwa parameter tambahan pada kedua model tidak signifikan dan nilai AIC
+maupun BIC lebih besar dibandingkan ARIMA(1,0,2). Oleh karena itu,
+ARIMA(1,0,2) dipertahankan sebagai model akhir.
+
+Peramalan terhadap 193 observasi data testing menghasilkan nilai MAE
+sebesar 34,65, RMSE sebesar 44,66, dan MAPE sebesar 59,12%. Nilai
+tersebut digunakan untuk menggambarkan besarnya kesalahan peramalan
+model terhadap data aktual pada periode testing.
